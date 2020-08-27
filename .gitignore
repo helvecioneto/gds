@@ -3,6 +3,8 @@
 
 #data file
 data/
+gds/data/
+gds/temp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
