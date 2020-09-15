@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
-from config import START,END,INTERVAL,INIT_H,END_H,SATELLITE,PRODUCT,CHANNEL,TMP,OUTPUT,BBOX,PROJ
+from config import START,END,INTERVAL,INIT_H,END_H,SATELLITE,PRODUCT,CHANNEL,TMP,OUTPUT,BBOX,PROJ,INTERP,DQC_THRESHOLD
 import s3fs
 import pandas as pd
 import numpy as np
 import requests
-from datetime import *
+from datetime import datetime
 import pathlib
 import errno
 import os
 import netCDF4
-import os
 import logging
 import warnings
 warnings.filterwarnings("ignore")
+
+server = SATELLITE+'/'+PRODUCT+'/'
+aws = s3fs.S3FileSystem(anon=True)
 
 def file_list():
     days = pd.date_range(start=START, end=END, freq=INTERVAL)
@@ -26,40 +28,42 @@ def file_list():
     return data_range
 
 def aws_file_list(list_of_files):
-
-    DownloadList = pd.DataFrame()  
     timestamp = []
     fileslist = []
     stringList = []
+    logging.basicConfig(filename='missing.txt', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
     
     for i in list_of_files:
-        ListFiles = np.array(aws.ls(server+i.strftime('%Y/%j/%H')))
-        stringList.append(i.strftime('%Y%j%H%M'))
-        timestamp.append(i.strftime('%Y/%m/%d %H:%M'))
-        
-        for file in ListFiles: 
-            if file.find('M3C'+str(CHANNEL)) >= 1:
-                fileslist.append(str(file))
-                
-            elif file.find('M6C'+str(CHANNEL)) >= 1:
-                fileslist.append(str(file))
-                
-                
-    list_ = pd.DataFrame({'url':fileslist})
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print('GOES-DOWNLOADER-SLICER')
+        print('Mount list of files')
+        print('Server :'+str(server)+ 'CHANNEL' + str(CHANNEL) + ' Date Time:  '+str(i))
+        try:
+            download_list = np.array(aws.ls(server+i.strftime('%Y/%j/%H')))
+            for file in download_list:
+                    if file.find('M3C'+str(CHANNEL)) >= 1:
+                        fileslist.append(str(file))
+                        stringList.append(i.strftime('%Y%j%H%M'))
+                        timestamp.append(i.strftime('%Y/%m/%d %H:%M'))
+                    if file.find('M6C'+str(CHANNEL)) >= 1:
+                        fileslist.append(str(file))
+                        stringList.append(i.strftime('%Y%j%H%M'))
+                        timestamp.append(i.strftime('%Y/%m/%d %H:%M'))
+                    else:
+                        pass
+        except:
+            logging.warning('FILE NOT FOUND! ->  Server :'+str(server)+ 'CHANNEL' + str(CHANNEL) + ' Date Time:  '+str(i))
+
+    list_ = pd.DataFrame({'url':fileslist,'timestamp':timestamp})
+    list_['strings'] = list_['url'].str.upper().str.contains('|'.join(stringList))
     list_ = list_.drop_duplicates()
-
-    regstr = '|'.join(stringList)
-    list_['strings'] = list_['url'].str.upper().str.contains(regstr)
-
-    DownloadList = list_[list_.strings]
-    DownloadList = DownloadList.drop(['strings'], axis=1)
-    DownloadList['timestamp'] = timestamp
-    DownloadList['path'] = DownloadList['url'].str.replace(SATELLITE, TMP)
-    DownloadList['url'] = DownloadList['url'].str.replace(SATELLITE, 'https://'+SATELLITE+'.s3.amazonaws.com')
-    DownloadList['file'] = DownloadList.apply(lambda x: pathlib.Path(x.path).name, axis=1)
-    DownloadList['path'] = DownloadList.apply(lambda x: pathlib.Path(x.path).parent, axis=1)
-
-    return DownloadList
+    list_ = list_[list_['strings'] == True]
+    list_['path'] = list_['url'].str.replace(SATELLITE, TMP)
+    list_['url'] = list_['url'].str.replace(SATELLITE, 'https://'+SATELLITE+'.s3.amazonaws.com')
+    list_['file'] = list_.apply(lambda x: pathlib.Path(x.path).name, axis=1)
+    list_['path'] = list_.apply(lambda x: pathlib.Path(x.path).parent, axis=1)
+    
+    return list_
 
 def download_files(list_of_files):
 
@@ -68,30 +72,39 @@ def download_files(list_of_files):
     logging.basicConfig(filename='warning_logs.txt', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
     for i,row in list_of_files.iterrows():
         print('File Counter',cnt+1,'/',fils)
-        print('Downloading...')
         dat_time = datetime.strptime(row.timestamp, '%Y/%m/%d %H:%M')
         path = str(dat_time.year)+'/'+str(dat_time.strftime('%m'))+'/'+str(dat_time.strftime('%d'))
         output = OUTPUT+'/'+path+'/'
+        print('Downloading '+str(row.file)+'...')
 
         try:
             StartTime = datetime.now()
             req = requests.get(row.url, stream = True)
             total_size = int(req.headers['content-length'])
             size = 0
-            
+
             pathlib.Path(row.path).mkdir(parents=True, exist_ok=True)
+            
+            print('GOES-DOWNLOADER-SLICER')
+            print('File Counter',cnt+1,'/',fils)
+            print('Downloading '+str(row.file)+'...')
 
             with open(str(row.path)+'/'+str(row.file),'wb') as output_:
                 for chunk in req.iter_content(chunk_size=1024):
                     if chunk:
                         rec_size = output_.write(chunk)
                         size = rec_size + size
-                        print('Date ->  ' +str(row.timestamp) + '   File->   {}\t{:3.0f}%\t{:.2f} min'.format(row.file,100.0*size/total_size, (datetime.now()-StartTime).seconds/60.0), end='\r', flush=True)
-            print('\n')
+
+#                        print('Date ->  ' +str(row.timestamp) + '   File->   {}\t{:3.0f}%\t{:.2f} min'.format(row.file,100.0*size/total_size, (datetime.now()-StartTime).seconds/60.0), end='\r', flush=True)
+#                        os.system('cls' if os.name == 'nt' else 'clear')
         except:
-            logging.warning('Error to Download -> Date Time: '+str(row.timestamp)+ ' -> File: '+str(row.file)+'')
+            logging.warning('Error in Download -> Date Time: '+str(row.timestamp)+ ' -> File: '+str(row.file)+'')
             cnt +=1
-        
+        try:
+            print('Filtering CMI based on quality control flag...')
+            os.system("./dqcfilter " + str(row.path) + '/' + str(row.file) + " " + str(DQC_THRESHOLD))
+        except:
+            logging.warning('Error filtering -> Date Time: '+str(row.timestamp)+ ' -> File: '+str(row.file)+'')
         try:
         	 ## Process
 	        print('Processing...')
@@ -99,8 +112,8 @@ def download_files(list_of_files):
 	        open_netcdf(path_,row.file,output)
 	        cnt +=1
         except:
-        	logging.warning('Error to proccess -> Date Time: '+str(row.timestamp)+ ' -> File: '+str(row.file)+'')
-        	cnt +=1
+            	logging.warning('Error to proccess -> Date Time: '+str(row.timestamp)+ ' -> File: '+str(row.file)+'')
+            	cnt +=1
 
 def open_netcdf(path_,file,output):
 
@@ -143,7 +156,7 @@ def open_netcdf(path_,file,output):
     summary = dataset.summary
     keywords = dataset.keywords
     keywords_vocabulary = dataset.keywords_vocabulary
-    license = dataset.license
+    license_ = dataset.license
     processing_level = dataset.processing_level
     date_created = dataset.date_created
     cdm_data_type = dataset.cdm_data_type
@@ -152,7 +165,7 @@ def open_netcdf(path_,file,output):
     timeline_id = dataset.timeline_id
     production_data_source = dataset.production_data_source
     id__ = dataset.id
-    
+
     ### Translate
     print('Translating file...')
     cmd1 = "gdal_translate -q -a_srs"
@@ -163,16 +176,16 @@ def open_netcdf(path_,file,output):
     full_cmd = cmd1+cmd2+cmd3+cmd4+cmd5
     os.environ['HDF5_USE_FILE_LOCKING']='FALSE'
     os.system(full_cmd)
-    
+
     ## Warp file
     print('Warping file...')
     cmd1_ = "gdalwarp -q -multi "
     cmd2_ = "-s_srs \"+proj=geos +a=6.37814e+06  +b=6.35675e+06 +lon_0=-75 +f=298.257 +h=35786023\" "
     cmd3_ = "-nomd -te "+str(BBOX)+" -t_srs '+proj=latlong +datum="+str(PROJ)+"\' "
     cmd4_ = "./tmp/navigation.modified.nc "
-    cmd5_ = "-of netCDF -co compress=DEFLATE -co FORMAT=NC4C -r near "
+    cmd5_ = "-of netCDF -co compress=DEFLATE -co FORMAT=NC4C -r "+str(INTERP)+" "
     cmd6_ = output
-    
+
     full_cmd_ = (cmd1_+cmd2_+cmd3_+cmd4_+cmd5_+cmd6_)
     os.system(full_cmd_)
 
@@ -192,7 +205,7 @@ def open_netcdf(path_,file,output):
 
     logo_inpe = "INPE-LABREN: Laboratorio de Modelagem e Estudos de Recursos Renovaveis de Energia"
 
-    ## Add Global atributes 
+    ## Add Global atributes
     os.system("ncatted -O -h -a naming_authority,global,o,c,"+str(naming_authority)+" "+str(output))
 
     os.system("ncatted -O -h -a institution,global,o,c,\""+str(inst_)+"\" "+str(output))
@@ -203,7 +216,7 @@ def open_netcdf(path_,file,output):
     os.system("ncatted -O -h -a production_site,global,o,c,\""+str(production_site)+"\" "+str(output))
     os.system("ncatted -O -h -a production_environment,global,o,c,\""+str(production_environment)+"\" "+str(output))
     os.system("ncatted -O -h -a spatial_resolution,global,o,c,\""+str(spatial_resolution)+"\" "+str(output))
-    os.system("ncatted -O -h -a orbital_slot,global,o,c,\""+str(spatial_resolution)+"\" "+str(output))
+    os.system("ncatted -O -h -a orbital_slot,global,o,c,\""+str(orbital_slot)+"\" "+str(output))
     os.system("ncatted -O -h -a platform_ID,global,o,c,\""+str(platform_ID)+"\" "+str(output))
     os.system("ncatted -O -h -a instrument_type,global,o,c,\""+str(instrument_type)+"\" "+str(output))
     os.system("ncatted -O -h -a scene_id,global,o,c,\""+str(scene_id)+"\" "+str(output))
@@ -213,7 +226,7 @@ def open_netcdf(path_,file,output):
     os.system("ncatted -O -h -a summary,global,o,c,\""+str(summary)+"\" "+str(output))
     os.system("ncatted -O -h -a keywords,global,o,c,\""+str(keywords)+"\" "+str(output))
     os.system("ncatted -O -h -a keywords_vocabulary,global,o,c,\""+str(keywords_vocabulary)+"\" "+str(output))
-    os.system("ncatted -O -h -a license,global,o,c,\""+str(license)+"\" "+str(output))
+    os.system("ncatted -O -h -a license,global,o,c,\""+str(license_)+"\" "+str(output))
     os.system("ncatted -O -h -a processing_level,global,o,c,\""+str(processing_level)+"\" "+str(output))
     os.system("ncatted -O -h -a date_created,global,o,c,\""+str(date_created)+"\" "+str(output))
     os.system("ncatted -O -h -a cdm_data_type,global,o,c,\""+str(cdm_data_type)+"\" "+str(output))
@@ -230,9 +243,10 @@ def open_netcdf(path_,file,output):
     print('File saved!')
 
 
-list_of_files = file_list()
-server = SATELLITE+'/'+PRODUCT+'/'    
-aws = s3fs.S3FileSystem(anon=True)
+def main():
+    list_of_files = file_list()
+    lista = aws_file_list(list_of_files)
+    download_files(lista)
 
-lista = aws_file_list(list_of_files)
-download_files(lista)
+if __name__ == "__main__":
+    main()
