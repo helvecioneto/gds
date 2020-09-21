@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-from config import START,END,INTERVAL,INIT_H,END_H,SATELLITE,PRODUCT,CHANNEL,TMP,OUTPUT,BBOX,PROJ,INTERP,DQC_THRESHOLD
+from config import START,END,INTERVAL,INIT_H,END_H,SATELLITE,PRODUCT,CHANNEL,TMP,OUTPUT,BBOX,PROJ,INTERP,DQC_THRESHOLD,CREAT_INTERVAL
 import s3fs
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime
+from datetime import datetime,timedelta
 import pathlib
 import errno
 import os
@@ -17,14 +17,23 @@ server = SATELLITE+'/'+PRODUCT+'/'
 aws = s3fs.S3FileSystem(anon=True)
 
 def file_list():
-    days = pd.date_range(start=START, end=END, freq=INTERVAL)
-    hours = pd.date_range(INIT_H,END_H, freq=INTERVAL).strftime('%H:%M:%S')
+    days = pd.date_range(start=START, end=END,freq='D',tz='America/Belem').strftime('%d/%m/%Y')
+    hours = pd.date_range(start=INIT_H,end=END_H, freq=INTERVAL).strftime('%H:%M')
 
     data_range = []
-    for d in range(len(days)):
-        for m in range(len(hours)):
-            if days[d].strftime('%H:%M:%S') == hours[m]:
-                data_range.append(days[d])
+
+    for d in days:
+        for h in hours:
+            if h == INIT_H:
+                tm = d+' '+h
+                tm = datetime.strptime(tm, '%d/%m/%Y %H:%M')
+                data_range.append(tm + timedelta(minutes=-CREAT_INTERVAL))
+                data_range.append(tm)
+            else:
+                tm = d+' '+h
+                tm = datetime.strptime(tm, '%d/%m/%Y %H:%M')
+                data_range.append(tm)
+
     return data_range
 
 def aws_file_list(list_of_files):
@@ -55,15 +64,22 @@ def aws_file_list(list_of_files):
             logging.warning('FILE NOT FOUND! ->  Server :'+str(server)+ 'CHANNEL' + str(CHANNEL) + ' Date Time:  '+str(i))
 
     list_ = pd.DataFrame({'url':fileslist,'timestamp':timestamp})
-    list_['strings'] = list_['url'].str.upper().str.contains('|'.join(stringList))
-    list_ = list_.drop_duplicates()
-    list_ = list_[list_['strings'] == True]
-    list_['path'] = list_['url'].str.replace(SATELLITE, TMP)
-    list_['url'] = list_['url'].str.replace(SATELLITE, 'https://'+SATELLITE+'.s3.amazonaws.com')
-    list_['file'] = list_.apply(lambda x: pathlib.Path(x.path).name, axis=1)
-    list_['path'] = list_.apply(lambda x: pathlib.Path(x.path).parent, axis=1)
-    
-    return list_
+
+    download_list = pd.DataFrame(columns=['timestamp','url'])
+
+    for r,row in list_.iterrows():
+        tmSm = datetime.strptime(row['timestamp'],'%Y/%m/%d %H:%M').strftime('%Y%j%H%M')
+        if 'c'+str(tmSm) in row['url']:
+            download_list = download_list.append({'timestamp':row['timestamp'],
+                                    'url':row['url']}, ignore_index=True)
+
+    download_list = download_list.drop_duplicates(subset=['timestamp'], keep='last')
+    download_list['path'] = download_list['url'].str.replace(SATELLITE, TMP)
+    download_list['url'] = download_list['url'].str.replace(SATELLITE, 'https://'+SATELLITE+'.s3.amazonaws.com')
+    download_list['file'] = download_list.apply(lambda x: pathlib.Path(x.path).name, axis=1)
+    download_list['path'] = download_list.apply(lambda x: pathlib.Path(x.path).parent, axis=1)
+
+    return download_list
 
 def download_files(list_of_files):
 
@@ -71,11 +87,9 @@ def download_files(list_of_files):
     cnt = 0
     logging.basicConfig(filename='warning_logs.txt', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
     for i,row in list_of_files.iterrows():
-        print('File Counter',cnt+1,'/',fils)
         dat_time = datetime.strptime(row.timestamp, '%Y/%m/%d %H:%M')
         path = str(dat_time.year)+'/'+str(dat_time.strftime('%m'))+'/'+str(dat_time.strftime('%d'))
         output = OUTPUT+'/'+path+'/'
-        print('Downloading '+str(row.file)+'...')
 
         try:
             StartTime = datetime.now()
@@ -87,7 +101,7 @@ def download_files(list_of_files):
             
             print('GOES-DOWNLOADER-SLICER')
             print('File Counter',cnt+1,'/',fils)
-            print('Downloading '+str(row.file)+'...')
+            print('Downloading '+str(row['timestamp']) + '  file:  :' +str(row.file)+'...')
 
             with open(str(row.path)+'/'+str(row.file),'wb') as output_:
                 for chunk in req.iter_content(chunk_size=1024):
@@ -243,10 +257,10 @@ def open_netcdf(path_,file,output):
     print('File saved!')
 
 
-def main():
-    list_of_files = file_list()
-    lista = aws_file_list(list_of_files)
-    download_files(lista)
+#def main():
+list_of_files = file_list()
+lista = aws_file_list(list_of_files)
+#    download_files(lista)
 
-if __name__ == "__main__":
-    main()
+#if __name__ == "__main__":
+#    main()
