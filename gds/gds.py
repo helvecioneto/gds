@@ -22,7 +22,6 @@ def file_list():
     hours = pd.date_range(start=INIT_H,end=END_H, freq=INTERVAL).strftime('%H:%M')
 
     data_range = []
-
     for d in days:
         for h in hours:
             if h == INIT_H:
@@ -47,36 +46,33 @@ def regex_strack(x,y):
 def aws_file_list(list_of_files):
     logging.basicConfig(filename='missing.txt', filemode='w', format='%(asctime)s - %(message)s', datefmt='%d-%b-%y %H:%M:%S')
     
-    download = pd.DataFrame(columns=['timestamp','url','regex'])
-    
-    for i in list_of_files:
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print('GOES-DOWNLOADER-SLICER')
-        print('Mount list of files')
-        print('Server :'+str(server)+ 'CHANNEL' + str(CHANNEL) + ' Date Time:  '+str(i))
+    download = pd.DataFrame(columns=['timestamp','url'])
+    print('Mount list of files')
 
+    for i in list_of_files:
         try:
-            
             if (i.strftime('%M')) == '00':
-                ii = i + timedelta(hours=-1)
-                down = (','.join(aws.ls(server+ii.strftime('%Y/%j/%H'))))
-                regx = ii.strftime(server+'%Y/%j/%H/OR_'+PRODUCT+'-(M3C'+CHANNEL+'|M6C'+CHANNEL)
-                reg2 = i.strftime(')\w+c%Y%j%H%M\w+.nc')
-                regxx = (regx+reg2)
-            else:
                 down = (','.join(aws.ls(server+i.strftime('%Y/%j/%H'))))
-                regxx = i.strftime(server+'%Y/%j/%H/OR_'+PRODUCT+'-(M3C'+CHANNEL+'|M6C'+CHANNEL+')\w+c%Y%j%H%M\w+.nc')
-                
-            download = download.append({'timestamp':i,
-                                    'url':down,
-                                    'regex':regxx}, ignore_index=True)
+                regx = i.strftime(server+'%Y/%j/%H/OR_'+PRODUCT+'-(M3C'+CHANNEL+'|M6C'+CHANNEL)
+                reg2 = i.strftime(')\w+c%Y%j%H\w+.nc')
+                regxx = (regx+reg2)
+
+                strings = down.split(",")
+                dow_first = []
+                for s in sorted(strings):
+                    matched = re.match(regxx, s)
+                    is_match = bool(matched)
+                    if is_match == True:
+                        dow_first.append(s)
+
+                download = download.append({'timestamp':i,
+                                        'url':dow_first[0]}, ignore_index=True)
         except:
             logging.warning('FILE NOT FOUND! ->  Server :'+str(server)+ 'CHANNEL' + str(CHANNEL) + ' Date Time:  '+str(i))
 
-    
-    download['url'] = [regex_strack(x,y) for x,y in download[['url','regex']].values]
     download['path'] = download['url'].str.replace(SATELLITE, TMP)
     download['url'] = download['url'].str.replace(SATELLITE, 'https://'+SATELLITE+'.s3.amazonaws.com')
+
     download['file'] = download.apply(lambda x: pathlib.Path(x.path).name, axis=1)
     download['timestamp'] = download['timestamp'].astype(str)
     
@@ -260,15 +256,6 @@ def open_netcdf(path_,file,output):
     os.system("ncatted -O -h -a production_data_source,global,o,c,\""+str(production_data_source)+"\" "+str(output))
     os.system("ncatted -O -h -a id,global,o,c,\""+str(id__)+"\" "+str(output))
     
-    
-#    print('criando variavel')
-#    outNC = nc.Dataset(output, 'r+', format='NETCDF4')
-#    print(outNC)
-#    outNC = outNC.createVariable('goes_imager_projection','i4',(goes_imager_projection))
-#    outNC.close()
-#    input()
-    
-
     dataset.close()
     ## Remove file
     os.system("rm -rf tmp/navigation.modified.nc")

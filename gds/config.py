@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # Start and end dates are in MM/DD/YYYY format.
 # End date is not inclusive (it will not be downloaded).
-START = '25/08/2019'
-END = '25/08/2019'
+START = '25/01/2019'
+END = '25/01/2019'
 INTERVAL = '60min'
 INIT_H = '09:00'
 END_H = '10:00'
